@@ -21,7 +21,7 @@ public:
     Tensor forward(Tensor& idx, Tensor& targets); // target: (vocab_size) = B * T
     virtual ParamsDict parameters(void) override;
 
-    void generate(string text, Tokenizer& tokenizer);
+    void generate(string text, Tokenizer& tokenizer, int top_k = 40, float temperature = 0.8f);
 
 private:
     void init_weight();

@@ -4,6 +4,9 @@
 #include <thread>
 #include <cstring>
 #include <queue>
+#include <cmath>
+#include <cfloat>
+#include <algorithm>
 
 using namespace tllm;
 
@@ -54,22 +57,22 @@ bool cmp(node& p1, node& p2){
     return p1.prob > p2.prob;
 }
 
-void GPT::generate(string text, Tokenizer& tokenizer) {
+void GPT::generate(string text, Tokenizer& tokenizer, int top_k, float temperature) {
     Tensor tokens = tokenizer.encode(text, 1, 0);
     index_t count = tokens.dsize();
-    std::priority_queue<node, std::vector<node>, decltype(&cmp)> heap(cmp);
     std::default_random_engine ge(time(0));
     std::uniform_real_distribution<float> d(0, 1);
-    int next;
     int prev = tokens[count - 1];
     while (count < block_size_) {
         tokens.to(device());
         Tensor ret = forward(tokens);
         ret.cpu();
         index_t last_index = ret.shape()[1] - 1;
+
+        std::priority_queue<node, std::vector<node>, decltype(&cmp)> heap(cmp);
         for (index_t i = 0; i < vocab_size_; ++i) {
             heap.push({ret[{0, last_index, i}], (int)i});
-            if (heap.size() > 5) {
+            if (heap.size() > (size_t)top_k) {
                 heap.pop();
             }
         }
@@ -78,20 +81,34 @@ void GPT::generate(string text, Tokenizer& tokenizer) {
             topk.push_back(heap.top());
             heap.pop();
         }
+
+        // forward() returns raw logits, so turn the top-k into an actual
+        // distribution (max-shifted softmax) before sampling from it.
+        float max_logit = -FLT_MAX;
+        for (auto& iter : topk) {
+            max_logit = std::max(max_logit, iter.prob);
+        }
         float sum = 0;
+        for (auto& iter : topk) {
+            iter.prob = std::exp((iter.prob - max_logit) / temperature);
+            sum += iter.prob;
+        }
+        // Replace each entry with the running CDF.
         float accum = 0;
         for (auto& iter : topk) {
-            iter.prob /= sum;
-            accum += iter.prob;
+            accum += iter.prob / sum;
             iter.prob = accum;
         }
+
+        int next = topk.back().id;  // fallback: highest-probability token
         float rand = d(ge);
         for (auto& iter : topk) {
             if (rand < iter.prob) {
                 next = iter.id;
+                break;
             }
         }
-        if (next == 1) break;
+        if (next == 1 || next == 2) break;
         tokenizer.saft_print(tokenizer.decode(prev, next));
         prev = next;
         ++count;
@@ -160,20 +177,51 @@ Tensor GPT::get_pos_ids(index_t T) {
     return pos;
 }
 
-void random_gen(float* t, index_t dsize) {
+void random_gen(float* t, index_t dsize, float std) {
     std::thread::id tid = std::this_thread::get_id();
     std::default_random_engine e(time(0) + *(unsigned int*)&tid);
-    std::normal_distribution<float> n(0, 0.02);
+    std::normal_distribution<float> n(0, std);
     for (int i = 0; i < dsize; ++i) {
         t[i] = n(e);
     }
 }
 
+void constant_gen(float* t, index_t dsize, float val) {
+    for (int i = 0; i < dsize; ++i) {
+        t[i] = val;
+    }
+}
+
+static bool ends_with(const string& s, const string& suffix) {
+    return s.size() >= suffix.size() &&
+           s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+
 void GPT::init_weight() {
     std::vector<std::thread> threads;
     for (auto iter : parameters()) {
+        const string& name = iter.first;
         Tensor& weight = iter.second.get();
-        threads.push_back(std::thread(random_gen, weight.data(), weight.dsize()));
+
+        // LayerNorm is an affine identity at init: gain 1, shift 0. Drawing it
+        // from N(0, 0.02) like the other tensors scales every residual branch
+        // to ~zero and the model has to claw the gain back before it can learn.
+        if (name.find("ln_") != string::npos || name.find("ln_f") != string::npos) {
+            threads.push_back(std::thread(constant_gen, weight.data(), weight.dsize(),
+                                          ends_with(name, ".bias") ? 0.f : 1.f));
+        }
+        else if (ends_with(name, ".bias")) {
+            threads.push_back(std::thread(constant_gen, weight.data(), weight.dsize(), 0.f));
+        }
+        else if (ends_with(name, "c_proj.weight")) {
+            // GPT-2 residual scaling: keep the variance of the residual stream
+            // constant as the n_layer branches accumulate into it.
+            threads.push_back(std::thread(random_gen, weight.data(), weight.dsize(),
+                                          0.02f / std::sqrt(2.f * blocks.size())));
+        }
+        else {
+            threads.push_back(std::thread(random_gen, weight.data(), weight.dsize(), 0.02f));
+        }
     }
     for (std::thread& t : threads) {
         t.join();

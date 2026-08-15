@@ -15,6 +15,9 @@ public:
 
     void step();
 
+    void set_lr(float lr) { lr_ = lr; }
+    float get_lr() const { return lr_; }
+
     void save(string path);
     void load(string path);
 

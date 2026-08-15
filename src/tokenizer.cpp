@@ -85,7 +85,8 @@ int Tokenizer::str_lookup(string str) {
 
 Tensor Tokenizer::encode(string text, int8_t bos, int8_t eos) {
   std::vector<int> tokens;
-  char* str_buffer = new char(max_token_length_ * 2 + 1 + 2);
+  // new char(n) allocates a single char holding the value n; this needs an array.
+  char* str_buffer = new char[max_token_length_ * 2 + 1 + 2];
   size_t str_len = 0;
 
   if (bos) tokens.push_back(1);
@@ -142,7 +143,7 @@ Tensor Tokenizer::encode(string text, int8_t bos, int8_t eos) {
         int best_id = -1;
         int best_idx = -1;
 
-        for (int i=0; i < tokens.size(); i++) {
+        for (int i=0; i + 1 < tokens.size(); i++) {
             // check if we can merge the pair (tokens[i], tokens[i+1])
             int id = str_lookup(vocab_[tokens[i]] + vocab_[tokens[i+1]]);
             if (id != -1 && vocab_scores_[id] > best_score) {
@@ -160,7 +161,7 @@ Tensor Tokenizer::encode(string text, int8_t bos, int8_t eos) {
         // merge the consecutive pair (best_idx, best_idx+1) into new token best_id
         tokens[best_idx] = best_id;
         // delete token at position best_idx+1, shift the entire sequence back 1
-        for (int i = best_idx+1; i < tokens.size(); i++) {
+        for (int i = best_idx+1; i + 1 < tokens.size(); i++) {
             tokens[i] = tokens[i+1];
         }
         tokens.pop_back();
@@ -169,7 +170,7 @@ Tensor Tokenizer::encode(string text, int8_t bos, int8_t eos) {
     // add optional EOS (=2) token, if desired
     if (eos) tokens.push_back(2);
 
-    free(str_buffer);
+    delete [] str_buffer;
     index_t len = tokens.size();
     Tensor ret({1, len});
     for (int i = 0; i < len; ++i) {

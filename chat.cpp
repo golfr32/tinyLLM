@@ -20,7 +20,7 @@ int main(int argc, char* argv[]) {
     gpt.load(argv[1]);
     gpt.cuda();
 
-    Tokenizer tokenizer("/home/slg/work/tinyLLM/data/tok4096.bin", 4096);
+    Tokenizer tokenizer("../data/tok4096.bin", 4096);
 
     std::cout << "User>> ";
     string text;
@@ -29,8 +29,5 @@ int main(int argc, char* argv[]) {
     std::cout.flush();
     gpt.generate(text, tokenizer);
     std::cout << std::endl;
-    
-
-
     return 0;
 }

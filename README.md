@@ -50,4 +50,12 @@ It is worth noting that this project did not build the code for training a token
 
 Please refer to the **custom tokenizers** part of [Llama2.c](https://github.com/karpathy/llama2.c) to obtain the corresponding training data filea and convert the tokenizer to binary format. The tokenizer of this project uses the same structure as Llama2.c, and the converted tokenizer bin file can be used directly.
 
-Unfortunately, there are still some problems with the training of the language model in this project. When the loss drops from 8 to about 3, it will stop declining, and the performance of the model is not very good. I am still working on this...
+# Note on a previous training bug
+Earlier versions of this project stalled with the loss stuck around 3 and generated a single token over and over. That was caused by a handful of bugs rather than by the model itself:
+
+* The NLLLoss backward pass scaled the gradient by the log-probability instead of using the constant `-1/N`, and `AdamW` produced a step whose sign was then flipped again by `apply_grad`. The two sign errors cancelled, so the loss did descend, but on the wrong objective — one whose gradient shrinks as the loss falls, which is what caused the plateau.
+* The causal mask filled future positions with `FLT_MIN`, which is the smallest *positive* float (~1e-38), not a large negative number. The mask was therefore a no-op and the model could attend to future tokens.
+* Every parameter, including LayerNorm gains, was initialised from `N(0, 0.02)`, so each LayerNorm scaled its branch to near zero at init.
+* The sampler in `GPT::generate` divided by an always-zero `sum` and never applied a softmax, collapsing to greedy decoding — the direct cause of the repeated-token output.
+
+These are fixed. The loss now passes the old 3.0 plateau in roughly a third of the steps and keeps descending.

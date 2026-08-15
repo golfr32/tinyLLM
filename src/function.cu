@@ -11,6 +11,12 @@
 
 namespace tllm {
 namespace F {
+
+// Large negative (not FLT_MIN, which is the smallest *positive* float) so that
+// masked positions vanish under softmax. Kept finite to avoid inf - inf = NaN
+// when the row max is subtracted.
+#define MASK_FILL_VALUE (-1e9f)
+
 detail::MatMulExp mat_mul;
 detail::LayerNorm layer_norm(0.00001);
 detail::Softmax softmax;
@@ -40,7 +46,7 @@ void causal_mask_fill(Tensor& att) {
       for (index_t h = 0; h < nh; ++h) {
         for (index_t i = 0; i < T; ++i) {
           for (index_t j = i + 1; j < T; ++j) {
-            att[{b, h, i, j}] = FLT_MIN;
+            att[{b, h, i, j}] = MASK_FILL_VALUE;
           }
         }
       }
@@ -62,9 +68,9 @@ __global__ void causal_mask_fill_kernel(float* att, index_t T, index_t dsize) {
   // printf("%d %d %d\n", gridDim.x, gridDim.y, gridDim.z);
   const int head_idx = blockIdx.z * T * T;
   const int y = blockIdx.y * blockDim.y + threadIdx.y;
-  const int x = blockIdx.x * blockDim.y + threadIdx.x;
+  const int x = blockIdx.x * blockDim.x + threadIdx.x;
   if (y < T && x < T && x > y) {
-      att[head_idx + y * T + x] = FLT_MIN;
+      att[head_idx + y * T + x] = MASK_FILL_VALUE;
   }
 }
 
@@ -864,7 +870,8 @@ __global__ void before_softmax_kernel(float* x1, int N, index_t dim,
     if (offset < dim && (head_offset + offset) < dsize) {
         data[offset] = x1[head_offset + offset];
     } else {
-      data[offset] = 0;
+      // Identity for a max-reduction; 0 would win over an all-negative row.
+      data[offset] = -FLT_MAX;
     }
   }
   __syncthreads();
@@ -1093,7 +1100,9 @@ __global__ void softmax_backward_kernel(float* x1_grad, float* x1_data,
 void Log::forward_process(Tensor& x1, Tensor& x) {
   if (x1.device() == "cpu") {
     for (int i = 0; i < x1.dsize(); ++i) {
-      x[i] = log(x1[i]);
+      // Same epsilon as grad_fn: a softmax probability can underflow to 0,
+      // and log(0) = -inf would poison the whole loss.
+      x[i] = log(x1[i] + 1e-8);
     }
   } else {
     const int block_size = 512;
@@ -1111,7 +1120,7 @@ void Log::forward_process(Tensor& x1, Tensor& x) {
 __global__ void log_kernel(float* x1, float* x, index_t dsize) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < dsize) {
-    x[idx] = log(x1[idx]);
+    x[idx] = log(x1[idx] + 1e-8);
   }
 }
 
@@ -1230,8 +1239,9 @@ void NLLLoss::lhs_grad_fn(TensorImplPtr x1, TensorImplPtr x2, TensorImplPtr x) {
   if (x1->device() == "cpu") {
     for (int i = 0; i < x2->dsize(); ++i) {
       index_t offset = x1->shape()[1] * i;
-      x1->grad_[offset + (int)(x2->data_[i])] += -(
-          x->grad_[0] / x2->dsize() * x1->data_[offset + (int)(x2->data_[i])]);
+      // d/dx1[i, target] of mean(-x1[i, target]) is -1/N. It must not be
+      // scaled by x1 itself.
+      x1->grad_[offset + (int)(x2->data_[i])] += -(x->grad_[0] / x2->dsize());
     }
   } else {
     const int block_size = 512;
@@ -1256,8 +1266,7 @@ __global__ void nllloss_backward_kernel(float* x1_grad, float* x1_data,
                                         index_t len, index_t dsize) {
   const int idx = blockIdx.x * blockDim.x + threadIdx.x;
   if (idx < dsize) {
-    x1_grad[idx * len + (int)(x2_data[idx])] +=
-        -(x_grad[0] / dsize * x1_data[idx * len + (int)(x2_data[idx])]);
+    x1_grad[idx * len + (int)(x2_data[idx])] += -(x_grad[0] / dsize);
   }
 }
 

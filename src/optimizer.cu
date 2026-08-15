@@ -110,7 +110,8 @@ __global__ void adamw_kernel(float* grad, float* data, float* m1, float* m2,
     m1[i] = beta1 * m1[i] + (1 - beta1) * grad[i];
     m2[i] = beta2 * m2[i] + (1 - beta2) * grad[i] * grad[i];
     float lr_n = lr * sqrt(1 - pow(beta2, t)) / (1 - pow(beta1, t));
-    grad[i] = -lr_n * (m1[i] / (sqrt(m2[i]) + ep) + weight_decay * data[i]);
+    // apply_grad() does data -= grad, so store the positive step here.
+    grad[i] = lr_n * (m1[i] / (sqrt(m2[i]) + ep) + weight_decay * data[i]);
   }
 }
 
@@ -129,8 +130,8 @@ void AdamW::step() {
         m2.get()[i] =
             beta2_ * m2.get()[i] + (1 - beta2_) * p.grad()[i] * p.grad()[i];
         float lr = lr_ * sqrt(1 - pow(beta2_, t)) / (1 - pow(beta1_, t));
-        p.grad()[i] = -lr * (m1.get()[i] / (sqrt(m2.get()[i]) + ep) +
-                             weight_decay_ * p.data()[i]);
+        p.grad()[i] = lr * (m1.get()[i] / (sqrt(m2.get()[i]) + ep) +
+                            weight_decay_ * p.data()[i]);
       }
     } else {
       const int block_size = 512;
@@ -161,7 +162,7 @@ void AdamW::step() {
         m2.get()[i] =
             beta2_ * m2.get()[i] + (1 - beta2_) * p.grad()[i] * p.grad()[i];
         float lr = lr_ * sqrt(1 - pow(beta2_, t)) / (1 - pow(beta1_, t));
-        p.grad()[i] = -lr * (m1.get()[i] / (sqrt(m2.get()[i]) + ep));
+        p.grad()[i] = lr * (m1.get()[i] / (sqrt(m2.get()[i]) + ep));
       }
     } else {
       const int block_size = 512;
