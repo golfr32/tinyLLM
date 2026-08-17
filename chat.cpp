@@ -15,19 +15,26 @@ int main(int argc, char* argv[]) {
         std::cout << "Usage: ./chat [model_path]" << std::endl;
         exit(0);
     }
-
+    bool quit = false;
     GPT gpt(6, 64, 4, 4096, 256, 0.2, false);
     gpt.load(argv[1]);
     gpt.cuda();
 
     Tokenizer tokenizer("../data/tok4096.bin", 4096);
 
-    std::cout << "User>> ";
     string text;
-    getline(std::cin, text);
-    std::cout << "tllm>> ";
-    std::cout.flush();
-    gpt.generate(text, tokenizer);
-    std::cout << std::endl;
+    while (!quit) {
+      std::cout << "User>> ";
+      getline(std::cin, text);
+      if (text == "q" || text == "Q") {
+        break;
+      }
+
+      std::cout << "tllm>> ";
+      std::cout.flush();
+      gpt.generate(text, tokenizer);
+      std::cout << std::endl;
+    }
+
     return 0;
 }
