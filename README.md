@@ -50,7 +50,8 @@ It is worth noting that this project did not build the code for training a token
 
 Please refer to the **custom tokenizers** part of [Llama2.c](https://github.com/karpathy/llama2.c) to obtain the corresponding training data filea and convert the tokenizer to binary format. The tokenizer of this project uses the same structure as Llama2.c, and the converted tokenizer bin file can be used directly.
 
-# Note on a previous training bug
+# Note on a previous training bug (fixed)
+
 Earlier versions of this project stalled with the loss stuck around 3 and generated a single token over and over. That was caused by a handful of bugs rather than by the model itself:
 
 * The NLLLoss backward pass scaled the gradient by the log-probability instead of using the constant `-1/N`, and `AdamW` produced a step whose sign was then flipped again by `apply_grad`. The two sign errors cancelled, so the loss did descend, but on the wrong objective — one whose gradient shrinks as the loss falls, which is what caused the plateau.
